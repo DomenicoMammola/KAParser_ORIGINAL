@@ -1,0 +1,317 @@
+unit CTParser;
+(*
+  Syntax:
+  0xABCD, 0ABCDh, $ABCD - Hex number
+  0b0101, 01010b,       - Binary number
+  90`15`2               - Degree
+   Operators by priorities:
+    {7  } () (BRACES)
+    {  6} ** (POWER),
+    {  5} ~ (INVERSE), ! (NOT),
+    {  4} * (MUL), / (DIV), % (MOD), %% (PERSENT),
+    {  3} + (ADD), - (SUB),
+    {  2} < (LT), <= (LE), == (EQ), <> != (NE), >= (GE), > (GT),
+    {  1} | (OR), ^ (XOR), & (AND),
+
+
+  Single parameter double functions supported. ROUND, TRUNC, INT, FRAC,
+  SIN, COS, TAN, ATAN, LN, EXP, SIGN, SGN, XSGN
+  These functions take a double value as a parameter and return a double
+  value.
+
+  Single Parameter string functions supported. TRIM, LTRIM, RTRIM
+  Thess functions take a string value as a parameter and return a string
+  value
+
+  Special functions supported. IF, EMPTY, LEN, AND, OR, CONCATENATE, REPL,
+  LEFT, RIGHT, SUBSTR, COMPARE, ISNA, ROUND, NOT, EVALUATE
+  Special functions use either a single parameter of type other than
+  their return type, or work with multiple parameters).
+
+
+*)
+
+// Use of String in TNamedVar Structure
+// Variables and functions are case sensitive
+
+interface
+
+uses SysUtils, Classes {$ifdef calctest}, Windows {$endif};
+
+type
+  TToken = (
+    { } tkEOF, tkERROR, tkASSIGN,
+    {7} tkLBRACE, tkRBRACE, tkNUMBER, tkIDENT, tkSEMICOLON,
+    {6} tkPOW,
+    {5} tkINV, tkNOT,
+    {4} tkMUL, tkDIV, tkMOD, tkPER,
+    {3} tkADD, tkSUB,
+    {2} tkLT, tkLE, tkEQ, tkNE, tkGE, tkGT, tkLIKE,
+    {1} tkOR, tkXOR, tkAND, tkString
+  );
+
+  ECalculate = class(Exception);
+  ECircular = class(Exception);
+  TCalcType = (ctGetValue, ctSetValue, ctFunction);
+  TExpType = (etString, etDouble, etBoolean, etUnknown);
+
+  TCalcNoIdentEvent = procedure (Sender: TObject; ctype: TCalcType;
+    const S: String; var Value: Double; var Handled: Boolean) of Object;
+  TCalcNoStrIdentEvent = procedure (Sender: TObject; ctype: TCalcType;
+    const S: String; var StrValue: String; var Handled: Boolean) of Object;
+
+  TCalcCBProc =  function(ctype: TCalcType; const S: String;
+      var Value: Double): Boolean of Object;
+  TCalcCBStrProc = function(ctype: TCalcType; const S: String;
+      var Value: String): Boolean of Object;
+
+  PEvalResult = ^TEvalResult;
+  TEvalResult = record
+    Val,
+    Res: Double;
+    LogOp: String;
+  end;
+
+  PNamedVar = ^TNamedVar;
+  TNamedVar = record
+    Value: Double;
+    Name: String;
+    IsNA: Boolean;
+    Dep: TList;
+  end;
+
+  PExpVal = ^TExpVal;
+  TExpVal = record
+    Exp: String;
+    Val: Double;
+  end;
+
+  PContext = ^TContext;
+  TContext = record
+    // For saving and restoring context
+    OldPtr: PChar;
+    OldLN: Integer;
+    OldExp,
+    OldSValue: String;
+    OldToken: TToken;
+  end;
+
+  PNamedStrVar = ^TNamedStrVar;
+  TNamedStrVar = record
+    Value,
+    Name: String;
+    IsNA: Boolean;
+    Dep: TList;
+  end;
+
+  TKAParser = class;
+
+  TFormula = class
+  private
+    FExp,
+    FName: String;
+    FIsNA: Boolean;
+    FValue: Double;
+    FStrValue: String;
+    FValid: Boolean;
+    FEvaluated: Boolean;
+    FCalc: TKAParser;
+    // A parser can be dependent on both, double as well as
+    // string variables.
+    FDep,
+    FStrDep,
+    FFormDep: TList;
+    function GetValue: Double;
+    function GetStrValue: String;
+  public
+    constructor Create(Calc: TKAParser);
+    destructor Destroy; override;
+    property Exp: String read FExp write FExp;
+    property Name: String read FName write FName;
+    property IsNA: Boolean read FIsNA write FIsNA;
+    property Value: Double read GetValue;
+    property StrValue: String read GetStrValue;
+  end;
+
+  TKAParser = class(TComponent)
+  private
+    {$ifdef CALCTEST}
+    T: TextFile;
+    Line: Integer;
+    {$endif}
+    {$ifdef friendlymode}
+    T2: TextFile;
+    {$endif}
+    ptr: PChar;
+    lineno: Word;
+    fvalue: Double;
+    svalue : String;
+    token: TToken;
+    CalcProc: TCalcCBProc;
+    StrCalcProc: TCalcCBStrProc;
+    FMaxExpCache: Word;
+    FRecFormula: TList;
+    FRecording: Boolean;
+    FOnNoIdent: TCalcNoIdentEvent;
+    FOnNoStrIdent: TCalcNoStrIdentEvent;
+    FExpression: String;
+    FVars,
+    FStrVars,
+    FFormulae: TList;
+    FSpecialFunctions: TStringList;
+    FExpCache: TList;
+    FEvalList: TList;
+    FDefaultStrVar,
+    FDefaultVar,
+    FDummyCalc: Boolean;
+    FDefaultStrVarAs: String;
+    FDefaultVarAs: Double;
+    FResultWasString: Boolean;
+    FStrIdent: String;
+
+    // property access methods
+    function  GetResult: Double;
+    function GetStrResult: String;
+    function  _GetVar(const Name: String): Double;
+    function  GetVar(const Name: String): Double;
+    function _GetStrVar(const Name: String): String;
+    function GetStrVar(const Name: String): String;
+    procedure SetVar(const Name: String; value: Double);
+    procedure SetStrVar(const Name, value: String);
+    function GetVarCount: Integer;
+    function GetStrVarCount: Integer;
+    function GetFormula(const Name: String): String;
+    function GetFormulaeCount: Integer;
+    procedure SetFormula(const Name, Value: String);
+    procedure RaiseError(const Msg: String);
+    function tofloat(B: Boolean): Double;
+    // Lexical parser functions
+    procedure lex;
+    procedure start(var R: Double);
+    procedure term (var R: Double);
+    procedure expr6(var R: Double);
+    procedure expr5(var R: Double);
+    procedure expr4(var R: Double);
+    procedure expr3(var R: Double);
+    procedure expr2(var R: Double);
+    procedure expr1(var R: Double);
+    procedure ExpStr(var R: String);
+    procedure StrTerm(var R: String);
+    procedure StrStart(var R: String);
+    function SaveContext: PContext;
+    procedure RestoreContext(P: PContext);
+    function ExecFunc(FuncName: String; ParamList: TStringList): Double;
+    function ExecStrFunc(FuncName: String; ParamList: TStringList): String;
+    function IsSpecialFunction(FN: String): Boolean;
+
+    procedure RecordVar(const Name: String);
+    procedure RecordStrVar(const Name: String);
+    procedure DelFormDep(Formula: TFormula);
+    // Sledgehammer deletes for use from Destroy only!
+    procedure DeleteVars;
+    procedure DeleteStrVars;
+    procedure DeleteFormulae;
+    // Formula and variable access methods
+    function GetFormulaObj(const Name: String; var Index: Integer): TFormula;
+    function GetVarObj(const Name: String; var Index: Integer): PNamedVar;
+    function GetStrVarObj(const Name: String; var Index: Integer): PNamedStrVar;
+    {$ifdef demo}
+    procedure Nag;
+    {$endif}
+    // vk:10/03/99
+    function GetEvalVal(Eval: Double): Double;
+    procedure DeleteEvals;
+  protected
+    // Default identifier handling for float calculations
+    function DefCalcProc(ctype: TCalcType; const S: String;
+      var V: Double): Boolean; virtual;
+    // Default identifier handling for string calculations
+    function DefStrCalcProc(ctype: TCalcType; const S: String;
+      var V: String): Boolean; virtual;
+    function IdentValue(ctype: TCalcType;
+              const Name: String; var Res: Double): Boolean; virtual;
+    function IdentStrValue(ctype: TCalcType;
+              const Name: String; var Res: String): Boolean; virtual;
+  public
+    constructor Create(AOwner: TComponent); override;
+    destructor Destroy; override;
+    function  NameOfVar(Index: Word): String;
+    function  NameOfStrVar(Index: Word): String;
+    function NameOfFormula(Index: Word): String;
+    function GetFormulaValue(const Name: String): Double;
+    function GetFormulaStrValue(const Name: String): String;
+    procedure DeleteVar(const Name: String);
+    procedure DeleteStrVar(const Name: String);
+    procedure DeleteFormula(const Name: String);
+    procedure SetVarNA(const Name: String; Val: Boolean);
+    procedure SetStrVarNA(const Name: String; Val: Boolean);
+    procedure SetFormulaNA(const Name: String; Val: Boolean);
+    function IsVarNA(const Name: String): Boolean;
+    function IsStrVarNA(const Name: String): Boolean;
+    function IsFormulaNA(const Name: String): Boolean;
+    // function GetExpType(Exp: String): TExpType;
+    // String calculations
+    function StrCalculate(const Formula: String;
+      var R: String; Proc: TCalcCBStrProc): Boolean;
+    // Float calculations
+    function Calculate(const Formula: String;
+      var R: Double; Proc: TCalcCBProc): Boolean;
+    {$ifdef CALCTEST}
+    procedure GetFormDep(const Name: String; Dep: TStringList);
+    {$endif}
+    // Added in support of the new Evaluate function vk:10/03/99
+    procedure AddEvaluation(LogOp: String; Val, Res: Double);
+    procedure RemoveEvaluation(LogOp: String; Val: Double);
+    // End new
+    procedure GetFormulaVarDep(const Name: String; Dep: TStringList);
+    procedure GetFormulaStrVarDep(const Name: String; Dep: TStringList);
+    procedure GetFormulaFormDep(const Name: String; Dep: TStringList);
+    procedure GetVarDep(const Name: String; Dep: TStringList);
+    procedure GetStrVarDep(const Name: String; Dep: TStringList);
+    property Vars[const Name: String]: Double Read GetVar Write SetVar;
+    property StrVars[const Name: String]: String Read GetStrVar Write SetStrVar;
+    property Formula[const Name: String]: String read GetFormula write SetFormula;
+    property VarCount: Integer read GetVarCount;
+    property StrVarCount: Integer read GetStrVarCount;
+    property FormulaeCount: Integer read GetFormulaeCount;
+    property Result: Double Read GetResult;
+    property StrResult: String Read GetStrResult;
+  published
+    // Properties
+    property Expression: String Read FExpression Write FExpression;
+    property OnNoIdent: TCalcNoIdentEvent read FOnNoIdent write FOnNoIdent;
+    property OnNoStrIdent: TCalcNoStrIdentEvent read FOnNoStrIdent
+      write FOnNoStrIdent;
+    property DefaultVar: Boolean read FDefaultVar write FDefaultVar
+      default False;
+    property DefaultStrVar: Boolean read FDefaultStrVar
+      write FDefaultStrVar default False;
+    property DefaultVarAs: Double read FDefaultVarAs
+      write FDefaultVarAs;
+    property DefaultStrVarAs: String read FDefaultStrVarAs
+      write FDefaultStrVarAs;
+    property MaxExpCache: Word read FMaxExpCache
+      write FMaxExpCache default 100;
+    property ResultWasString: Boolean read FResultWasString write FResultWasString;
+  end;
+
+
+resourcestring
+  SSyntaxError = 'Syntax error.';
+  SFunctionError = 'Unknown function or variable';
+  SInvalidDegree = 'Invalid degree %s';
+  SInvalidString = 'Invalid string';
+  SCannotDelete = 'Cannot delete a variable with formula dependencies!';
+  SWrongParamCount = 'Incorrect parameter count for function!';
+  SCircularDependency = 'Circular dependency in formula';
+  SUnexpectedStrExp = 'Unexpected String Expression : %s';
+
+// Utility math functions
+function fmod(x, y: extended): extended;
+function power(x, y: Double): Double;
+function DegreeToStr(Angle: Extended): String;
+function StrToDegree(const S: String): Extended;
+
+implementation
+
+uses Dialogs, Txtsrch ;

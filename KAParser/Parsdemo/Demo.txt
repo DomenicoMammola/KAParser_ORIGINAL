@@ -1,0 +1,5 @@
+Demo Application
+----------------
+You will need to compile the demo project before you can run it. Ensure that CTParser.dcu is in the path before compiling the project. The demo application comes with a data file DEMO.DAT. When you run the demo the first thing you need to do is load the data from DEMO.DAT. Use the File|Open menu option to open DEMO.DAT. 
+
+Browsing DEMO.DAT and the source code of the demo will put you on top of what is going on pretty soon. You can then play around with the contents of DEMO.DAT to put the parser through its paces.

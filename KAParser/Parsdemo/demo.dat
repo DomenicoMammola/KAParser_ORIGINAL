@@ -1,0 +1,21 @@
+;Demo.dat
+; Demo data for ParsDemo.exe - The KAParser 1.01 demo application
+; Copyright (c) Vijainder K Thakur vkthakur@aol.com
+
+[VARS]
+a=10
+b=20
+
+[STRING VARS]
+HelloVar=Hello
+WorldVar=World
+
+[FORMULAE]
+c=a+b
+d=c/a
+e=uk/b
+f=uks + ' World'
+Greetings=HelloVar + ' ' + WorldVar
+MixedFormula=if(Len(Greetings) > a, a, b)
+Test=MixedFormula * 10
+g=((a/2.3)**4)/2.5
